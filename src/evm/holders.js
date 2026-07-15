@@ -7,6 +7,7 @@
 
 const config = require('../config');
 const { wallet } = require('./provider');
+const { fetchJson } = require('../services/fetchJson');
 
 // Pure: collapse token holdings to per-owner balances, drop excluded owners and
 // balances below `minHoldRaw`. `accounts`: [{ owner, amountRaw }]. `excludeSet`:
@@ -45,9 +46,14 @@ async function fetchAllHolders(token) {
   let guard = 0;
   do {
     const url = params ? `${base}?${new URLSearchParams(params).toString()}` : base;
-    const res = await fetch(url, { headers: { accept: 'application/json' } });
-    if (!res.ok) throw new Error(`holders fetch failed (${res.status}) for ${token}`);
-    const data = await res.json();
+    // Retry transient explorer errors (Blockscout/Cloudflare 520/5xx/429) so a
+    // blip doesn't fail the whole cycle after PONS has already been bought.
+    let data;
+    try {
+      data = await fetchJson(url, { headers: { accept: 'application/json' } });
+    } catch (err) {
+      throw new Error(`holders fetch failed (${err.status || err.message}) for ${token}`);
+    }
     for (const it of data.items || []) {
       out.push({ owner: it.address.hash, amountRaw: String(it.value) });
     }
