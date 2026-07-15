@@ -166,6 +166,63 @@ async function getStats() {
   };
 }
 
+async function addAirdrop({ cycleId, rewardToken, recipient, amountRaw, amountUi, signature, status }) {
+  const db = getDb();
+  const id = await nextId('airdrops');
+  const doc = {
+    id,
+    cycle_id: cycleId,
+    reward_token: rewardToken,
+    recipient,
+    amount_raw: String(amountRaw),
+    amount_ui: amountUi ?? null,
+    signature: signature ?? null,
+    status: status ?? 'ok',
+    created_at: new Date().toISOString(),
+  };
+  await db.collection('airdrops').insertOne(doc);
+  bus.emit('airdrop', doc); // push to SSE clients
+  return id;
+}
+
+async function getAirdrops(limit, offset, rewardToken = null) {
+  const db = getDb();
+  const filter = rewardToken ? { reward_token: rewardToken } : {};
+  const total = await db.collection('airdrops').countDocuments(filter);
+  const items = await db
+    .collection('airdrops')
+    .find(filter, NO_ID)
+    .sort({ id: -1 })
+    .skip(offset)
+    .limit(limit)
+    .toArray();
+  return { total, items };
+}
+
+// Aggregate successful airdrop sends PER reward token: send count, total UI
+// amount distributed, and distinct recipient wallets. Keyed by reward_token.
+async function getAirdropTotals() {
+  const db = getDb();
+  const rows = await db
+    .collection('airdrops')
+    .aggregate([
+      { $match: { status: 'ok' } },
+      {
+        $group: {
+          _id: '$reward_token',
+          sends: { $sum: 1 },
+          totalUi: { $sum: { $ifNull: ['$amount_ui', 0] } },
+          recipients: { $addToSet: '$recipient' },
+        },
+      },
+      { $project: { _id: 1, sends: 1, totalUi: 1, holders: { $size: '$recipients' } } },
+    ])
+    .toArray();
+  const byToken = {};
+  for (const r of rows) byToken[r._id] = { sends: r.sends, totalUi: r.totalUi, holders: r.holders };
+  return byToken;
+}
+
 module.exports = {
   createCycle,
   finishCycle,
@@ -175,4 +232,7 @@ module.exports = {
   getLastCycle,
   getAllSteps,
   getStats,
+  addAirdrop,
+  getAirdrops,
+  getAirdropTotals,
 };
