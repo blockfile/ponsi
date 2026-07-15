@@ -48,6 +48,8 @@ async function finishCycle(id, fields) {
     'tokens_bought',
     'tokens_burned',
     'burn_sig',
+    'eligible_holders',
+    'total_holders',
     'note',
     'error',
   ];
