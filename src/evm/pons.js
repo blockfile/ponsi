@@ -1,18 +1,17 @@
 'use strict';
 
-// NOXA Fun creator-fee claiming on Robinhood Chain.
+// pons.family creator-fee claiming on Robinhood Chain.
 //
-// How it works on-chain (reverse-engineered from live transactions — the
-// contracts are unverified but the flow is stable and observable):
-//   - The Launch Locker (config.noxaLocker) holds each launched token's Uniswap
-//     V3 LP position. Uncollected trading fees accrue inside that position.
-//   - Anyone can call `collect(address token)` on the fee vault
-//     (config.noxaFeeVault, selector 0x06ec16f8). The vault pulls the position's
-//     fees through the locker and splits them; the creator share of the
-//     WETH-side fees (observed 35%) is sent DIRECTLY to the token's deployer
-//     address, regardless of who called. The token-side fees are mostly burned.
-//   - So the operating wallet must be the deployer of TOKEN_ADDRESS; the claim
-//     lands as WETH in this wallet.
+// How it works on-chain (verified against the live PonsLaunchFactory / locker):
+//   - The PonsLaunchLocker (config.ponsLocker) holds each launched token's
+//     Uniswap V3 LP position NFT. Uncollected trading fees accrue in that
+//     position.
+//   - `collectFees(address token)` on the locker pulls the position's fees to
+//     the locker, takes the protocol share (tokenProtocolFeeShares) for the
+//     protocol fee recipient, and sends the remainder of BOTH sides to the
+//     token's fee recipient — the deployer wallet by default (or feeRedirects).
+//     The deployer is authorized to call it, so the operating wallet must be the
+//     deployer of TOKEN_ADDRESS; the WETH share lands in this wallet.
 
 const { Contract, Interface, formatEther } = require('ethers');
 const config = require('../config');
@@ -23,7 +22,11 @@ const FACTORY_ABI = [
   'function getLaunchedToken(address token) view returns (tuple(address token, address deployer, address pairedToken, address positionManager, uint256 positionId, uint256 dexId, uint256 launchConfigId, uint256 restrictionsEndBlock, uint256 supply, bool isToken0, uint24 poolFee, bool exists, uint256 initialBuyAmount))',
 ];
 
-const VAULT_ABI = ['function collect(address token)'];
+// PonsLaunchLocker — collectFees(token) claims the position's fees and routes the
+// creator remainder to the deployer; tokenProtocolFeeShares(token) reads the
+// protocol's percentage cut (creator gets 100 - that).
+const LOCKER_FEE_ABI = ['function collectFees(address token) returns (uint256 amount0, uint256 amount1)'];
+const LOCKER_VIEW_ABI = ['function tokenProtocolFeeShares(address token) view returns (uint256)'];
 
 // Uniswap V3 NonfungiblePositionManager — static-calling collect() as the
 // position owner returns the currently collectable (amount0, amount1) without
@@ -47,14 +50,14 @@ function fakeSig(prefix) {
 }
 
 function factory() {
-  return new Contract(config.noxaFactory, FACTORY_ABI, provider);
+  return new Contract(config.ponsFactory, FACTORY_ABI, provider);
 }
 
 function launcherToken(address) {
   return new Contract(address, LAUNCHER_TOKEN_ABI, provider);
 }
 
-/** NOXA launch record for a token (throws if TOKEN_ADDRESS is unset). */
+/** pons.family launch record for a token (throws if TOKEN_ADDRESS is unset). */
 async function getLaunchedToken(token = config.tokenAddress) {
   if (!token) throw new Error('TOKEN_ADDRESS is required');
   return factory().getLaunchedToken(token);
@@ -62,24 +65,23 @@ async function getLaunchedToken(token = config.tokenAddress) {
 
 /**
  * Read the uncollected LP fees for the launched token WITHOUT claiming, split
- * into the WETH side (creator payout source) and the token side (which NOXA
- * mostly burns when collect() runs). Read by static-calling the position
- * manager's collect() as the locker. Live mode only.
+ * into the WETH side and the token side. Read by static-calling the position
+ * manager's collect() as the locker (which owns the position NFT). Live mode only.
  * @returns {Promise<{wethRaw: bigint, tokenRaw: bigint}>} base units
  */
 async function getUncollectedLpFees() {
   const launch = await getLaunchedToken();
-  if (!launch.exists) throw new Error(`token ${config.tokenAddress} was not launched via the NOXA factory`);
+  if (!launch.exists) throw new Error(`token ${config.tokenAddress} was not launched via the pons.family factory`);
 
   const pm = new Contract(launch.positionManager, POSITION_MANAGER_ABI, provider);
   const [amount0, amount1] = await pm.collect.staticCall(
     {
       tokenId: launch.positionId,
-      recipient: config.noxaLocker,
+      recipient: config.ponsLocker,
       amount0Max: MAX_UINT128,
       amount1Max: MAX_UINT128,
     },
-    { from: config.noxaLocker } // the locker owns the position NFT
+    { from: config.ponsLocker } // the locker owns the position NFT
   );
   // launch.isToken0 == our token is token0 → WETH (pair token) is the other side.
   return {
@@ -89,9 +91,26 @@ async function getUncollectedLpFees() {
 }
 
 /**
+ * The protocol's fee-share percentage for TOKEN_ADDRESS, read from the locker.
+ * Falls back to PROTOCOL_FEE_SHARE_PCT if the read fails. The creator (this
+ * wallet) receives the remaining (100 - share)%.
+ * @returns {Promise<number>} protocol share, percent
+ */
+async function getProtocolFeeSharePct() {
+  try {
+    const locker = new Contract(config.ponsLocker, LOCKER_VIEW_ABI, provider);
+    const share = Number(await locker.tokenProtocolFeeShares(config.tokenAddress));
+    return Number.isFinite(share) && share >= 0 && share <= 100 ? share : config.protocolFeeSharePct;
+  } catch (_err) {
+    return config.protocolFeeSharePct;
+  }
+}
+
+/**
  * Read the claimable creator-fee balance WITHOUT claiming (gates the trigger).
- * Estimate: creator share (CREATOR_FEE_SHARE_PCT) of the WETH-side uncollected
- * LP fees.
+ * Estimate: the creator remainder (100 - protocol share) of the WETH-side
+ * uncollected LP fees. The token-side fees also accrue to the creator but are
+ * not counted here (the trigger is denominated in ETH/WETH).
  * @returns {Promise<number>} claimable ETH (WETH)
  */
 async function getClaimableEth() {
@@ -99,7 +118,8 @@ async function getClaimableEth() {
     return simvault.peek(); // pure read — accrual happens in simulateFeeAccrual()
   }
   const { wethRaw } = await getUncollectedLpFees();
-  const creatorShare = (wethRaw * BigInt(Math.round(config.creatorFeeSharePct * 100))) / 10000n;
+  const protocolPct = await getProtocolFeeSharePct();
+  const creatorShare = (wethRaw * BigInt(Math.round((100 - protocolPct) * 100))) / 10000n;
   return Number(formatEther(creatorShare));
 }
 
@@ -113,9 +133,9 @@ function simulateFeeAccrual() {
 }
 
 /**
- * Claim creator fees: call collect(TOKEN_ADDRESS) on the NOXA fee vault. The
- * creator's WETH share is paid straight to the deployer wallet (this wallet).
- * The claimed amount is read exactly from the receipt's WETH Transfer logs.
+ * Claim creator fees: call collectFees(TOKEN_ADDRESS) on the Pons locker. The
+ * creator remainder is routed straight to the deployer wallet (this wallet). The
+ * claimed WETH amount is read exactly from the receipt's WETH Transfer logs.
  * @returns {Promise<{signature, ethClaimed, simulated, note?}>}
  */
 async function claimCreatorFees() {
@@ -129,10 +149,10 @@ async function claimCreatorFees() {
     return { signature: null, ethClaimed: 0, simulated: false, note: 'nothing to claim' };
   }
 
-  const vault = new Contract(config.noxaFeeVault, VAULT_ABI, wallet);
-  const tx = await vault.collect(config.tokenAddress);
+  const locker = new Contract(config.ponsLocker, LOCKER_FEE_ABI, wallet);
+  const tx = await locker.collectFees(config.tokenAddress);
   const receipt = await tx.wait();
-  console.log(`[tx] claim creator fees: ${tx.hash}`);
+  console.log(`[tx] claim creator fees (collectFees): ${tx.hash}`);
 
   // Sum the WETH actually transferred to our wallet in this tx — the exact payout.
   const me = wallet.address.toLowerCase();
@@ -151,6 +171,7 @@ module.exports = {
   getLaunchedToken,
   launcherToken,
   getUncollectedLpFees,
+  getProtocolFeeSharePct,
   getClaimableEth,
   simulateFeeAccrual,
   claimCreatorFees,

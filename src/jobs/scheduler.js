@@ -3,7 +3,7 @@
 const cron = require('node-cron');
 const config = require('../config');
 const { runCycle } = require('./cycle');
-const { getClaimableEth, simulateFeeAccrual } = require('../evm/noxa');
+const { getClaimableEth, simulateFeeAccrual } = require('../evm/pons');
 const { getEthPriceUsd } = require('../evm/price');
 const bus = require('../events');
 

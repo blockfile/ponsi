@@ -2,7 +2,7 @@
 
 // Shared, cached read of the live unclaimed creator-fee balance so /api/unclaimed
 // and /api/status don't each hit the RPC on every request.
-const { getClaimableEth } = require('../evm/noxa');
+const { getClaimableEth } = require('../evm/pons');
 
 let cache = { value: null, at: 0 };
 const TTL_MS = 20_000;

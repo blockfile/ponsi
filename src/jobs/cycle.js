@@ -2,7 +2,7 @@
 
 const config = require('../config');
 const repo = require('../db/repository');
-const { claimCreatorFees } = require('../evm/noxa');
+const { claimCreatorFees } = require('../evm/pons');
 const { buyToken } = require('../evm/uniswap');
 const { burnToken } = require('../evm/burn');
 const { getWethBalanceEth, unwrapAllWeth } = require('../evm/erc20');

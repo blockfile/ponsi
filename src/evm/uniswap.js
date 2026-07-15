@@ -9,7 +9,7 @@ const { Contract, parseEther, formatEther } = require('ethers');
 const config = require('../config');
 const { provider, wallet } = require('./provider');
 const { wethContract, getDecimals, readTokenBalance } = require('./erc20');
-const { launcherToken } = require('./noxa');
+const { launcherToken } = require('./pons');
 
 const ROUTER_ABI = [
   'function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96) params) payable returns (uint256 amountOut)',
