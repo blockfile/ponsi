@@ -120,8 +120,9 @@ const config = {
   minHold: num(process.env.MIN_HOLD, 100000), // min PONZI balance to qualify
   rewardCapPct: num(process.env.REWARD_CAP_PCT, 0), // per-wallet weight cap, % of supply (0 = pure pro-rata)
   clusters: parseClusters(process.env.CLUSTERS), // wallet groups treated as one person for the cap
-  airdropBatchSize: num(process.env.AIRDROP_BATCH_SIZE, 150), // recipients per disperse/transfer batch
-  disperseAddress: lowerOrNull(process.env.DISPERSE_ADDRESS), // batch-transfer contract (null → sequential transfers)
+  airdropBatchSize: num(process.env.AIRDROP_BATCH_SIZE, 30), // max airdrop txs in flight (sliding window); also recipients per disperse batch
+  airdropGasLimit: num(process.env.AIRDROP_GAS_LIMIT, 120000), // fixed gas per airdrop transfer (skips per-tx estimateGas)
+  disperseAddress: lowerOrNull(process.env.DISPERSE_ADDRESS), // batch-transfer contract (null → pipelined transfers)
   // Extra owner addresses excluded from airdrops (pool, treasury, etc.), comma-separated.
   airdropExclude: (process.env.AIRDROP_EXCLUDE || '')
     .split(',')
