@@ -4,7 +4,6 @@ const cron = require('node-cron');
 const config = require('../config');
 const { runCycle } = require('./cycle');
 const { getClaimableEth, simulateFeeAccrual } = require('../evm/pons');
-const { getEthPriceUsd } = require('../evm/price');
 const bus = require('../events');
 
 const state = {
@@ -14,17 +13,18 @@ const state = {
   lastRunAt: null,
   lastResult: null, // { id, status }
   lastClaimable: null,
-  lastClaimableUsd: null,
   startedAt: null,
 };
 
 /**
- * One timer tick (every POLL_SCHEDULE, default 5 minutes). Advances the simulated
- * vault (DRY_RUN only), reads the claimable creator-fee balance, and runs a cycle
- * once it is worth >= CLAIM_THRESHOLD_USD (threshold 0 = claim whatever accrued).
+ * One timer tick (every POLL_SCHEDULE). Advances the simulated vault (DRY_RUN
+ * only), reads the claimable creator-fee balance, and runs a cycle depending on
+ * TRIGGER_MODE:
+ *   - 'interval'     → run on whatever has accrued (any claimable > 0)
+ *   - 'accumulation' → run only once claimable >= CLAIM_EVERY_ETH
  * Skips silently (no cycle row) otherwise. Overlap-guarded.
  * @param {string} trigger 'poll' | 'manual'
- * @returns {Promise<{ran:boolean, claimable?:number, claimableUsd?:number, reason?:string, cycle?:object}>}
+ * @returns {Promise<{ran:boolean, claimable?:number, reason?:string, cycle?:object}>}
  */
 async function pollOnce(trigger) {
   if (state.paused) return { ran: false, reason: 'paused' };
@@ -33,9 +33,9 @@ async function pollOnce(trigger) {
     return { ran: false, reason: 'cycle already running' };
   }
 
-  // Hold the run flag through the balance/price reads too — a manual
-  // POST /api/run landing between these awaits and the cycle start must not
-  // spawn a second concurrent cycle (wallet-nonce contention in live mode).
+  // Hold the run flag through the balance read too — a manual POST /api/run
+  // landing between the read and the cycle start must not spawn a second
+  // concurrent cycle (wallet-nonce contention in live mode).
   state.isRunning = true;
   try {
     simulateFeeAccrual(); // no-op in live mode
@@ -45,31 +45,20 @@ async function pollOnce(trigger) {
       return { ran: false, claimable, reason: 'nothing claimable' };
     }
 
-    // USD threshold gate: accumulate until the claim is worth pulling the trigger.
+    // Accumulation mode: hold until the claim is worth CLAIM_EVERY_ETH.
     // Manual POST /api/run bypasses this via triggerNow().
-    let claimableUsd = null;
-    if (config.claimThresholdUsd > 0) {
-      const price = await getEthPriceUsd();
-      if (price == null) {
-        // Can't price the claim — hold rather than claim blind; next tick retries.
-        return { ran: false, claimable, reason: 'ETH price unavailable — cannot evaluate USD threshold' };
-      }
-      claimableUsd = +(claimable * price).toFixed(2);
-      state.lastClaimableUsd = claimableUsd;
-      if (claimableUsd < config.claimThresholdUsd) {
-        return {
-          ran: false,
-          claimable,
-          claimableUsd,
-          reason: `below threshold ($${claimableUsd} < $${config.claimThresholdUsd})`,
-        };
-      }
+    if (config.triggerMode === 'accumulation' && claimable < config.claimEveryEth) {
+      return {
+        ran: false,
+        claimable,
+        reason: `below accumulation threshold (${claimable} < ${config.claimEveryEth} ETH)`,
+      };
     }
 
     state.lastRunAt = new Date().toISOString();
     const cycle = await runCycle();
     state.lastResult = { id: cycle.id, status: cycle.status };
-    return { ran: true, claimable, claimableUsd, cycle };
+    return { ran: true, claimable, cycle };
   } finally {
     state.isRunning = false;
   }
@@ -84,8 +73,10 @@ function start() {
   state.task = cron.schedule(config.pollSchedule, () => {
     pollOnce('poll').catch((err) => console.error('[scheduler] poll error:', err));
   });
+  const gate =
+    config.triggerMode === 'accumulation' ? ` threshold=${config.claimEveryEth} ETH` : '';
   console.log(
-    `[scheduler] started — claims on schedule "${config.pollSchedule}" (dryRun=${config.dryRun})`
+    `[scheduler] started — mode="${config.triggerMode}" schedule="${config.pollSchedule}"${gate} (dryRun=${config.dryRun})`
   );
 }
 
@@ -119,14 +110,14 @@ async function triggerNow() {
 
 function getState() {
   return {
+    triggerMode: config.triggerMode,
     pollSchedule: config.pollSchedule,
-    claimThresholdUsd: config.claimThresholdUsd,
+    claimEveryEth: config.claimEveryEth,
     paused: state.paused,
     isRunning: state.isRunning,
     lastRunAt: state.lastRunAt,
     lastResult: state.lastResult,
     lastClaimable: state.lastClaimable,
-    lastClaimableUsd: state.lastClaimableUsd,
     startedAt: state.startedAt,
   };
 }
