@@ -1,9 +1,9 @@
 'use strict';
 
-// Claim creator fees from the NOXA fee vault (collect(TOKEN_ADDRESS)).
+// Claim creator fees from the pons.family locker (collectFees(TOKEN_ADDRESS)).
 //   node scripts/claim.js [--confirm]
 const { config, hr, requireConfirm } = require('./_util');
-const { getClaimableEth, claimCreatorFees } = require('../src/evm/noxa');
+const { getClaimableEth, claimCreatorFees } = require('../src/evm/pons');
 
 (async () => {
   hr('CLAIM CREATOR FEES');

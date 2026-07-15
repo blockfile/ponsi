@@ -1,6 +1,6 @@
 'use strict';
 
-// Buys on Uniswap V3 (SwapRouter02) — NOXA Fun tokens trade in ordinary V3
+// Buys on Uniswap V3 (SwapRouter02) — pons.family tokens trade in ordinary V3
 // pools (1% fee tier by default), so a plain exactInputSingle WETH→token swap
 // is the whole buy path. The claim pays the wallet in WETH, which is exactly
 // the router's input token; any native-ETH shortfall is wrapped on the fly.
@@ -15,7 +15,7 @@ const ROUTER_ABI = [
   'function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96) params) payable returns (uint256 amountOut)',
 ];
 
-const DEFAULT_POOL_FEE = 10000; // NOXA Fun launches on the 1% fee tier
+const DEFAULT_POOL_FEE = 10000; // pons.family launches on the 1% fee tier
 const FEE_TIERS = [500, 3000, 10000]; // standard V3 tiers a token may pool on
 const BUY_ATTEMPTS = 3;
 
@@ -23,12 +23,12 @@ function fakeSig(prefix) {
   return `${prefix}_${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
 }
 
-/** The token's V3 fee tier (from its NOXA launcher fields), defaulting to 1%. */
+/** The token's V3 fee tier (from its pons.family launcher fields), defaulting to 1%. */
 async function resolvePoolFee(token) {
   try {
     return Number(await launcherToken(token).poolFee());
   } catch (_err) {
-    return DEFAULT_POOL_FEE; // not a NOXA launcher token — assume the 1% tier
+    return DEFAULT_POOL_FEE; // not a pons.family launcher token — assume the 1% tier
   }
 }
 

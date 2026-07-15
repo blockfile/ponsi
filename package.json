@@ -1,8 +1,8 @@
 {
-  "name": "noxaliqui",
+  "name": "ponsliqui",
   "version": "0.1.0",
   "private": true,
-  "description": "Buyback-and-burn bot on Robinhood Chain: recycles NOXA creator fees into buying and burning your token every minute (DRY_RUN first).",
+  "description": "pons.family reward bot on Robinhood Chain: recycles PONZI creator fees into buying + airdropping PONS to holders, buying + burning PONZI, and a dev cut (DRY_RUN first).",
   "type": "commonjs",
   "main": "server.js",
   "scripts": {
