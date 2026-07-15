@@ -112,6 +112,10 @@ const config = {
   rewardBuyPct, // % of each claim → buy PONS (airdrop to holders)
   burnPct, // % of each claim → buy PONZI and burn
   devPct, // remainder kept as native ETH (dev cut + gas)
+  // false (default) → burn ONLY the BURN_PCT buyback. true → also burn the PONZI
+  // token-side creator fees that accrue to the wallet on every claim (which is
+  // what made a single cycle's burn far larger than the 2% buyback).
+  burnTokenSideFees: bool(process.env.BURN_TOKEN_SIDE_FEES, false),
   slippagePct: num(process.env.SLIPPAGE_PCT, 5), // Uniswap V3 buy-swap slippage, percent
   gasReserveEth: num(process.env.GAS_RESERVE_ETH, 0.005), // native ETH never wrapped/spent on a buy
   deadAddress: lowerOrNull(process.env.DEAD_ADDRESS) || '0x000000000000000000000000000000000000dead',

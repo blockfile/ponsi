@@ -110,14 +110,15 @@ async function runCycle() {
       });
     }
 
-    // 3. Burn leg — buy PONZI with burnEth and burn everything we hold of it
-    //    (the buy plus any PONZI token-side fees paid by the claim).
+    // 3. Burn leg — buy PONZI with burnEth and burn it. By default burn ONLY the
+    //    buyback; set BURN_TOKEN_SIDE_FEES=true to also burn the PONZI token-side
+    //    creator fees that accrue to the wallet each claim.
     let burned = 0;
     let burnSig = null;
     if (burnEth > 0) {
       const buyBurn = await buyToken(config.tokenAddress, burnEth);
       await repo.addStep({ cycleId: id, name: 'buy', status: 'ok', signature: buyBurn.signature, detail: { leg: 'burn', token: config.tokenAddress, ethSpent: burnEth, tokensBought: buyBurn.tokensBought } });
-      const toBurnRaw = config.dryRun
+      const toBurnRaw = config.dryRun || !config.burnTokenSideFees
         ? buyBurn.tokensBoughtRaw
         : (await readTokenBalance(config.tokenAddress, config.wallet.address)).toString();
       const burn = await burnToken(config.tokenAddress, toBurnRaw);
