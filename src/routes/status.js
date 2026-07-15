@@ -8,21 +8,24 @@ const scheduler = require('../jobs/scheduler');
 const { provider, wallet, walletAddress } = require('../evm/provider');
 const { getUnclaimedEth } = require('../services/metrics');
 const { getEthPriceUsd, toUsd } = require('../evm/price');
+const { sumAirdrops } = require('../services/format');
 
 const router = express.Router();
 
-const TOKEN_SYMBOL = process.env.TOKEN_SYMBOL || 'TOKEN';
+const TOKEN_SYMBOL = config.tokenSymbol;
 
 // GET /api/status — everything the dashboard needs: cards, totals (with USD),
 // live unclaimed fees, scheduler state, and the last cycle.
 router.get('/status', async (req, res, next) => {
   try {
-    const [stats, lastCycle, unclaimed, price] = await Promise.all([
+    const [stats, lastCycle, unclaimed, price, airdropTotals] = await Promise.all([
       repo.getStats(),
       repo.getLastCycle(),
       getUnclaimedEth().catch(() => ({ eth: null, at: Date.now() })),
       getEthPriceUsd(),
+      repo.getAirdropTotals().catch(() => ({})),
     ]);
+    const air = sumAirdrops(airdropTotals);
 
     let ethBalance = null;
     let balanceSource = 'none';
@@ -39,6 +42,7 @@ router.get('/status', async (req, res, next) => {
     res.json({
       dryRun: config.dryRun,
       tokenSymbol: TOKEN_SYMBOL,
+      rewardSymbol: config.rewardSymbol,
       chainId: config.chainId,
       ethPriceUsd: price,
 
@@ -48,6 +52,8 @@ router.get('/status', async (req, res, next) => {
         unclaimedUsd: toUsd(unclaimed.eth, price),
         totalClaimedEth: stats.total_eth_claimed,
         totalClaimedUsd: toUsd(stats.total_eth_claimed, price),
+        rewardsDistributed: air.rewardsDistributed,
+        rewardHolders: air.rewardHolders,
       },
 
       wallet: {
@@ -58,12 +64,17 @@ router.get('/status', async (req, res, next) => {
       },
       token: {
         address: config.tokenAddress,
+        reward: config.rewardToken,
       },
-      // Buyback-and-burn loop parameters (trigger, buy %).
+      // Reward-and-burn loop parameters (trigger, split).
       config: {
+        triggerMode: config.triggerMode,
         pollSchedule: config.pollSchedule,
-        claimThresholdUsd: config.claimThresholdUsd,
-        buyPct: config.buyPct,
+        claimEveryEth: config.claimEveryEth,
+        rewardBuyPct: config.rewardBuyPct,
+        burnPct: config.burnPct,
+        devPct: config.devPct,
+        minHold: config.minHold,
         deadAddress: config.deadAddress,
       },
       totals: {
@@ -75,6 +86,9 @@ router.get('/status', async (req, res, next) => {
         ethSpentBuying: +(stats.total_eth_spent_buy || 0).toFixed(9),
         tokensBurned: stats.total_tokens_burned || 0,
         burns: stats.burns || 0,
+        rewardsDistributed: air.rewardsDistributed,
+        rewardSends: air.rewardSends,
+        rewardHolders: air.rewardHolders,
       },
       scheduler: scheduler.getState(),
       lastCycle,

@@ -35,9 +35,9 @@ app.use(express.json());
 
 app.get('/', (req, res) => {
   res.json({
-    name: 'noxaliqui',
+    name: 'ponsliqui',
     description:
-      'NOXA Fun creator fees → buy your token → add + burn (lock) Uniswap V3 liquidity (Robinhood Chain)',
+      'pons.family PONZI creator fees → buy PONS + airdrop to PONZI holders / buy + burn PONZI / dev cut (Robinhood Chain)',
     dryRun: config.dryRun,
     chainId: config.chainId,
     wallet: walletAddress(),
@@ -52,6 +52,7 @@ app.get('/', (req, res) => {
       'GET  /api/stream (SSE live push)',
       'GET  /api/cycles',
       'GET  /api/cycles/:id',
+      'GET  /api/airdrops',
       'GET  /api/transactions',
       'POST /api/run',
       'POST /api/pause',
@@ -81,11 +82,11 @@ app.use((err, req, res, next) => {
     const origin = req.get('origin') || 'unknown';
     if (!loggedBlockedOrigins.has(origin)) {
       loggedBlockedOrigins.add(origin);
-      console.warn(`[noxa-rewards] blocking CORS origin: ${origin}`);
+      console.warn(`[ponsliqui] blocking CORS origin: ${origin}`);
     }
     return res.status(403).json({ error: 'origin not allowed' });
   }
-  console.error('[noxa-rewards] request error:', err);
+  console.error('[ponsliqui] request error:', err);
   res.status(500).json({ error: err.message });
 });
 
@@ -93,22 +94,22 @@ let server;
 
 async function main() {
   await db.connect();
-  console.log(`[noxa-rewards] MongoDB connected (${config.mongoDb})`);
+  console.log(`[ponsliqui] MongoDB connected (${config.mongoDb})`);
 
   getEthPriceUsd().catch(() => {}); // warm the price cache for USD values
 
   server = app.listen(config.port, () => {
-    console.log(`[noxa-rewards] listening on http://localhost:${config.port}`);
-    console.log(`[noxa-rewards] dryRun=${config.dryRun} chainId=${config.chainId} wallet=${walletAddress()}`);
+    console.log(`[ponsliqui] listening on http://localhost:${config.port}`);
+    console.log(`[ponsliqui] dryRun=${config.dryRun} chainId=${config.chainId} wallet=${walletAddress()}`);
     if (config.walletIsEphemeral) {
-      console.log('[noxa-rewards] WARNING: using an ephemeral wallet (no WALLET_PRIVATE_KEY set) — dry run only');
+      console.log('[ponsliqui] WARNING: using an ephemeral wallet (no WALLET_PRIVATE_KEY set) — dry run only');
     }
     scheduler.start();
   });
 }
 
 async function shutdown(signal) {
-  console.log(`\n[noxa-rewards] ${signal} received, shutting down`);
+  console.log(`\n[ponsliqui] ${signal} received, shutting down`);
   if (server) server.close();
   await db.close();
   process.exit(0);
@@ -117,7 +118,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 main().catch((err) => {
-  console.error('[noxa-rewards] failed to start:', err);
+  console.error('[ponsliqui] failed to start:', err);
   process.exit(1);
 });
 

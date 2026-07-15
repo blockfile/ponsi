@@ -44,16 +44,18 @@ const loadActivity = cached(3000, async () => {
 });
 
 const loadStats = cached(15000, async () => {
-  const [stats, unclaimed, market] = await Promise.all([
+  const [stats, unclaimed, market, airdropTotals] = await Promise.all([
     repo.getStats(),
     getUnclaimedEth().catch(() => ({ eth: null })),
     getMarketData().catch(() => ({ tokenInLp: null, marketCap: null })),
+    repo.getAirdropTotals().catch(() => ({})),
   ]);
   return toPublicStats({
     stats,
     unclaimedEth: unclaimed.eth,
     operatingWallet: walletAddress(),
     market,
+    airdropTotals,
   });
 });
 
@@ -86,12 +88,13 @@ router.get('/countdown', (req, res) => {
 
 // Headline numbers for the frontend hero.
 const loadSummary = cached(10000, async () => {
-  const [stats, price, market] = await Promise.all([
+  const [stats, price, market, airdropTotals] = await Promise.all([
     repo.getStats(),
     getEthPriceUsd().catch(() => 0),
     getMarketData().catch(() => ({ marketCap: null })),
+    repo.getAirdropTotals().catch(() => ({})),
   ]);
-  return toPublicSummary({ stats, price, marketCapUsd: market.marketCap ?? null });
+  return toPublicSummary({ stats, price, marketCapUsd: market.marketCap ?? null, airdropTotals });
 });
 
 // GET /summary — hero headline stats.
@@ -107,8 +110,8 @@ router.get('/summary', async (req, res, next) => {
 // ({ accruedUsd, thresholdUsd }). Public mirror of /api/unclaimed.
 const loadAccrual = cached(15000, async () => {
   const [{ eth }, price] = await Promise.all([getUnclaimedEth(), getEthPriceUsd()]);
-  const { unclaimedUsd, claimThresholdUsd } = buildUnclaimedPayload(eth, price);
-  return { accruedUsd: unclaimedUsd ?? 0, thresholdUsd: claimThresholdUsd };
+  const { unclaimedEth, unclaimedUsd, triggerMode, claimEveryEth } = buildUnclaimedPayload(eth, price);
+  return { accruedEth: unclaimedEth ?? 0, accruedUsd: unclaimedUsd ?? 0, triggerMode, thresholdEth: claimEveryEth };
 });
 router.get('/accrual', async (req, res, next) => {
   try {

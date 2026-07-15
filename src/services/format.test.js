@@ -9,13 +9,14 @@ const {
   toPublicStats,
 } = require('./format');
 
-test('buildUnclaimedPayload reports the live balance and the USD claim threshold', () => {
+test('buildUnclaimedPayload reports the live balance and the ETH trigger threshold', () => {
   const out = buildUnclaimedPayload(0.5, 3000);
-  assert.deepStrictEqual(Object.keys(out).sort(), ['claimThresholdUsd', 'ethPriceUsd', 'unclaimedEth', 'unclaimedUsd']);
+  assert.deepStrictEqual(Object.keys(out).sort(), ['claimEveryEth', 'ethPriceUsd', 'triggerMode', 'unclaimedEth', 'unclaimedUsd']);
   assert.strictEqual(out.unclaimedEth, 0.5);
   assert.strictEqual(out.unclaimedUsd, 1500);
   assert.strictEqual(out.ethPriceUsd, 3000);
-  assert.strictEqual(typeof out.claimThresholdUsd, 'number');
+  assert.strictEqual(typeof out.claimEveryEth, 'number');
+  assert.strictEqual(typeof out.triggerMode, 'string');
   assert.strictEqual(buildUnclaimedPayload(null, 3000).unclaimedEth, null);
 });
 

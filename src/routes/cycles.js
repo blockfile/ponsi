@@ -38,6 +38,22 @@ router.get('/cycles/:id', async (req, res, next) => {
   }
 });
 
+// GET /api/airdrops?limit=&offset=&token=  — paginated PONS airdrop history
+router.get('/airdrops', async (req, res, next) => {
+  try {
+    const limit = clamp(req.query.limit, 50, 1, 500);
+    const offset = clamp(req.query.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+    const token = req.query.token ? String(req.query.token) : null;
+    const [{ total, items }, totals] = await Promise.all([
+      repo.getAirdrops(limit, offset, token),
+      repo.getAirdropTotals(),
+    ]);
+    res.json({ total, limit, offset, totals, items });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/transactions?limit=&offset=  — enriched activity feed for the dashboard table
 router.get('/transactions', async (req, res, next) => {
   try {
