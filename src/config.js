@@ -15,13 +15,29 @@ function num(value, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function parseClusters(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((g) => Array.isArray(g))
+      .map((g) => g.filter((a) => typeof a === 'string' && a.trim()).map((a) => a.trim()))
+      .filter((g) => g.length > 0);
+  } catch (_err) {
+    console.warn('[ponsliqui] CLUSTERS is not valid JSON — ignoring');
+    return [];
+  }
+}
+
 const DRY_RUN = bool(process.env.DRY_RUN, true);
 
 /**
  * Load the signing wallet (0x-prefixed hex private key). It must be the wallet
- * that deployed the token on NOXA Fun — the creator fee share is paid to the
- * deployer address. In DRY_RUN with no key configured, an ephemeral wallet is
- * generated so the server runs out of the box (no funds are ever touched).
+ * that deployed PONZI on pons.family — the creator fee share is paid to the
+ * deployer address, and that wallet is authorized to call collectFees(). In
+ * DRY_RUN with no key configured, an ephemeral wallet is generated so the server
+ * runs out of the box (no funds are ever touched).
  */
 function loadWallet() {
   const raw = process.env.WALLET_PRIVATE_KEY;
@@ -43,6 +59,24 @@ const { wallet, ephemeral: walletIsEphemeral } = loadWallet();
 
 const lowerOrNull = (v) => (v ? String(v).trim().toLowerCase() : null);
 
+// ── Buyback / reward split (of each WETH claim) ──────────────────────────────
+// REWARD_BUY_PCT → buy PONS and airdrop it to PONZI holders; BURN_PCT → buy PONZI
+// and burn it; the remainder (dev cut) stays in the wallet as native ETH for gas.
+const rewardBuyPct = num(process.env.REWARD_BUY_PCT, 80);
+const burnPct = num(process.env.BURN_PCT, 10);
+if (rewardBuyPct < 0 || burnPct < 0 || rewardBuyPct + burnPct > 100) {
+  throw new Error(
+    `invalid split: REWARD_BUY_PCT(${rewardBuyPct}) + BURN_PCT(${burnPct}) must be within [0, 100]`
+  );
+}
+const devPct = +(100 - rewardBuyPct - burnPct).toFixed(6);
+
+const triggerMode = ['interval', 'accumulation'].includes(
+  String(process.env.TRIGGER_MODE || 'interval').toLowerCase()
+)
+  ? String(process.env.TRIGGER_MODE || 'interval').toLowerCase()
+  : 'interval';
+
 const config = {
   port: num(process.env.PORT, 3000),
   dryRun: DRY_RUN,
@@ -55,39 +89,52 @@ const config = {
   wallet,
   walletIsEphemeral,
 
-  // NOXA Fun contracts (Robinhood Chain deployments; override per chain).
-  noxaFactory: process.env.NOXA_FACTORY || '0xD9eC2db5f3D1b236843925949fe5bd8a3836FCcB',
-  noxaLocker: process.env.NOXA_LOCKER || '0x7F03effbd7ceB22A3f80Dd468f67eF27826acD85',
-  noxaFeeVault: process.env.NOXA_FEE_VAULT || '0x9eFdC1A8e6E94f16A228e44f3025E1f346EE0417',
+  // pons.family contracts (Robinhood Chain deployments; override per chain).
+  ponsFactory: process.env.PONS_FACTORY || '0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB',
+  ponsLocker: process.env.PONS_LOCKER || '0x736D76699C26D0d966744cAe304C000d471f7F35',
   weth: process.env.WETH_ADDRESS || '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73',
   swapRouter: process.env.SWAP_ROUTER || '0xCaf681a66D020601342297493863E78C959E5cb2',
-  // Observed creator share of the WETH-side LP fees paid by collect() — used only
-  // to estimate the claimable balance; the actual payout is whatever the vault sends.
-  creatorFeeSharePct: num(process.env.CREATOR_FEE_SHARE_PCT, 35),
+  // Protocol's share of each collectFees() payout (both fee sides); the creator
+  // (this wallet) gets the remainder. Used only to estimate the claimable balance
+  // for the trigger — the actual payout is measured from the receipt's logs.
+  protocolFeeSharePct: num(process.env.PROTOCOL_FEE_SHARE_PCT, 10),
 
-  // The token you launched on NOXA Fun. Its creator fees fund the cycle; the bot
-  // buys it and burns it.
+  // The PONZI token you launched on pons.family. Its creator fees fund the cycle.
   tokenAddress: lowerOrNull(process.env.TOKEN_ADDRESS),
-  tokenSymbol: process.env.TOKEN_SYMBOL || 'TOKEN',
+  tokenSymbol: process.env.TOKEN_SYMBOL || 'PONZI',
 
-  // ── Buyback-and-burn loop ────────────────────────────────────────────────
-  // Each claim: buy the token with BUY_PCT of the claimed WETH and burn those
-  // tokens (send to DEAD_ADDRESS — out of circulation forever). The remaining
-  // (100 - BUY_PCT)% is unwrapped to native ETH and kept in the wallet to pay
-  // transaction gas.
-  buyPct: num(process.env.BUY_PCT, 80), // % of each claim used to buy (then burn) the token
+  // The PONS reward token: bought with REWARD_BUY_PCT of each claim and airdropped
+  // to eligible PONZI holders.
+  rewardToken: process.env.REWARD_TOKEN || '0x39dBED3a2bd333467115dE45665cC57F813C4571',
+  rewardSymbol: process.env.REWARD_SYMBOL || 'PONS',
+
+  // ── Split ────────────────────────────────────────────────────────────────
+  rewardBuyPct, // % of each claim → buy PONS (airdrop to holders)
+  burnPct, // % of each claim → buy PONZI and burn
+  devPct, // remainder kept as native ETH (dev cut + gas)
   slippagePct: num(process.env.SLIPPAGE_PCT, 5), // Uniswap V3 buy-swap slippage, percent
-  gasReserveEth: num(process.env.GAS_RESERVE_ETH, 0.005), // native ETH never wrapped/spent on the buy
-  // Burn sink for the bought tokens. Default is the canonical EVM dead address.
+  gasReserveEth: num(process.env.GAS_RESERVE_ETH, 0.005), // native ETH never wrapped/spent on a buy
   deadAddress: lowerOrNull(process.env.DEAD_ADDRESS) || '0x000000000000000000000000000000000000dead',
 
-  // Trigger — the scheduler checks on this timer (default every minute) and
-  // runs a cycle only once the claimable fees reach CLAIM_THRESHOLD_USD. Set the
-  // threshold to 0 to claim whatever has accrued on every tick (the old timer mode).
-  pollSchedule: process.env.POLL_SCHEDULE || '*/1 * * * *',
-  // Default 0 → buy-and-burn every minute on whatever fees accrued. Raise it to
-  // batch claims until they are worth $N (saves gas when fees are tiny).
-  claimThresholdUsd: num(process.env.CLAIM_THRESHOLD_USD, 0),
+  // ── Airdrop (PONS → PONZI holders) ──────────────────────────────────────────
+  minHold: num(process.env.MIN_HOLD, 100000), // min PONZI balance to qualify
+  rewardCapPct: num(process.env.REWARD_CAP_PCT, 0), // per-wallet weight cap, % of supply (0 = pure pro-rata)
+  clusters: parseClusters(process.env.CLUSTERS), // wallet groups treated as one person for the cap
+  airdropBatchSize: num(process.env.AIRDROP_BATCH_SIZE, 150), // recipients per disperse/transfer batch
+  disperseAddress: lowerOrNull(process.env.DISPERSE_ADDRESS), // batch-transfer contract (null → sequential transfers)
+  // Extra owner addresses excluded from airdrops (pool, treasury, etc.), comma-separated.
+  airdropExclude: (process.env.AIRDROP_EXCLUDE || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+
+  // ── Trigger ─────────────────────────────────────────────────────────────────
+  // The scheduler ticks on POLL_SCHEDULE. TRIGGER_MODE decides the gate:
+  //   'interval'     → fire on whatever has accrued every tick (default)
+  //   'accumulation' → fire only once claimable >= CLAIM_EVERY_ETH
+  triggerMode,
+  pollSchedule: process.env.POLL_SCHEDULE || '*/5 * * * *',
+  claimEveryEth: num(process.env.CLAIM_EVERY_ETH, 0.005),
   // DRY_RUN only: simulated ETH added to the fee vault each tick, so cycles have
   // something to claim without real fees.
   dryRunFeePerPoll: num(process.env.DRY_RUN_FEE_PER_POLL, 0.01),
@@ -97,7 +144,7 @@ const config = {
 
   // Storage (MongoDB)
   mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017',
-  mongoDb: process.env.MONGODB_DB || 'noxaliqui',
+  mongoDb: process.env.MONGODB_DB || 'ponsliqui',
 
   // CORS allowlist (comma-separated). Default: localhost dev origins. Set to your
   // frontend domain(s) in production, or "*" to allow any origin.
