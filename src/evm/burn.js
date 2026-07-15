@@ -9,6 +9,7 @@ const { formatUnits } = require('ethers');
 const config = require('../config');
 const { erc20, getDecimals } = require('./erc20');
 const { wallet } = require('./provider');
+const { sendTx } = require('./send');
 
 function fakeSig(prefix) {
   return `${prefix}_${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
@@ -33,7 +34,8 @@ async function burnToken(token, amountRaw) {
   if (amount <= 0n) throw new Error(`nothing to burn (amount ${amountRaw})`);
 
   const decimals = await getDecimals(token);
-  const tx = await erc20(token, wallet).transfer(config.deadAddress, amount);
+  // Resend on a stale-nonce reject (RPC lag after the buy tx) — see send.js.
+  const tx = await sendTx(() => erc20(token, wallet).transfer(config.deadAddress, amount));
   await tx.wait();
   console.log(`[tx] burn ${formatUnits(amount, decimals)} tokens → ${config.deadAddress}: ${tx.hash}`);
   return {

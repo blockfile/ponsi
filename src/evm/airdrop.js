@@ -14,6 +14,7 @@ const config = require('../config');
 const repo = require('../db/repository');
 const { wallet } = require('./provider');
 const { erc20, getDecimals } = require('./erc20');
+const { sendTx } = require('./send');
 
 const DISPERSE_ABI = ['function disperseToken(address token, address[] recipients, uint256[] values)'];
 
@@ -48,13 +49,15 @@ async function airdropToken({ rewardToken, allocations, cycleId }) {
         const disperse = new Contract(config.disperseAddress, DISPERSE_ABI, wallet);
         const recipients = batch.map((a) => a.owner);
         const values = batch.map((a) => BigInt(a.amountRaw));
-        const tx = await disperse.disperseToken(rewardToken, recipients, values);
+        // Resend on a stale-nonce reject (RPC lag after the buy tx) — see send.js.
+        const tx = await sendTx(() => disperse.disperseToken(rewardToken, recipients, values));
         await tx.wait();
         for (const a of batch) sigByRecipient.set(a.owner, tx.hash);
       } else {
         const token = erc20(rewardToken, wallet);
         for (const a of batch) {
-          const tx = await token.transfer(a.owner, BigInt(a.amountRaw));
+          // Resend on a stale-nonce reject (RPC lag after the buy tx) — see send.js.
+          const tx = await sendTx(() => token.transfer(a.owner, BigInt(a.amountRaw)));
           await tx.wait();
           sigByRecipient.set(a.owner, tx.hash);
         }
